@@ -1,84 +1,49 @@
 import cv2
+import torch
 import numpy as np
-from matplotlib import pyplot as plt
-from picamera2 import Picamera2
-from picamera2.devices import IMX500
-from picamera2.devices.imx500 import NetworkIntrinsics
+import matplotlib.pyplot as plt
 
-# Define colors for segmentation
-COLOURS = np.array([[0, 0, 0], [255, 0, 0]], dtype=np.uint8)  # Background and Cup color
+from torch import nn
+from transformers import AutoImageProcessor, SegformerForSemanticSegmentation
 
-def process_segmentation_output(segmentation_mask, original_image):
-    """Process the segmentation output from the IMX500 AI camera."""
-    # Convert segmentation mask to binary for the optic cup
-    cup_mask = (segmentation_mask == 1).astype(np.uint8) * 255
+# Load image
+image = cv2.imread('fundus_dhanush.jpg')
+image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-    # Morphological operations to refine the mask
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (12, 12))
-    refined_mask = cv2.morphologyEx(cup_mask, cv2.MORPH_OPEN, kernel)
+# Load processor and model
+processor = AutoImageProcessor.from_pretrained("pamixsun/segformer_for_optic_disc_cup_segmentation")
+model = SegformerForSemanticSegmentation.from_pretrained("pamixsun/segformer_for_optic_disc_cup_segmentation")
 
-    # Fit ellipse to the detected cup
-    contours, _ = cv2.findContours(refined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if contours:
-        largest_contour = max(contours, key=cv2.contourArea)
-        if len(largest_contour) >= 5:
-            ellipse = cv2.fitEllipse(largest_contour)
-            ellipse_mask = np.zeros_like(refined_mask, dtype=np.uint8)
-            cv2.ellipse(ellipse_mask, ellipse, 255, -1)
-            return ellipse_mask, refined_mask
+# Preprocess the image
+inputs = processor(image, return_tensors="pt")
 
-    return np.zeros_like(refined_mask), refined_mask
+# Get model predictions
+with torch.no_grad():
+    outputs = model(**inputs)
+    logits = outputs.logits.cpu()
 
-def display_results(original_image, segmentation_mask, refined_mask, ellipse_mask):
-    """Display the segmentation and processed results."""
-    fig, axes = plt.subplots(1, 4, figsize=(15, 6))
+# Upsample logits to original image size
+upsampled_logits = nn.functional.interpolate(
+    logits,
+    size=image.shape[:2],
+    mode="bilinear",
+    align_corners=False,
+)
 
-    axes[0].imshow(cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB))
-    axes[0].set_title("Original Image")
-    axes[0].axis("off")
+# Get predicted segmentation mask (optic disc and cup)
+pred_disc_cup = upsampled_logits.argmax(dim=1)[0].numpy().astype(np.uint8)
 
-    axes[1].imshow(segmentation_mask, cmap="gray")
-    axes[1].set_title("Segmentation Output")
-    axes[1].axis("off")
+# Display original image and prediction side by side
+fig, axes = plt.subplots(1, 2, figsize=(12, 6))
 
-    axes[2].imshow(refined_mask, cmap="gray")
-    axes[2].set_title("Refined Mask")
-    axes[2].axis("off")
+# Display the original image
+axes[0].imshow(image)
+axes[0].set_title('Original Image')
+axes[0].axis('off')
 
-    axes[3].imshow(ellipse_mask, cmap="gray")
-    axes[3].set_title("Fitted Ellipse")
-    axes[3].axis("off")
+# Display the segmentation result (optic disc and cup mask)
+axes[1].imshow(pred_disc_cup, cmap='jet')
+axes[1].set_title('Predicted Segmentation (Disc/Cup)')
+axes[1].axis('off')
 
-    plt.tight_layout()
-    plt.show()
-
-if __name__ == "__main__":
-    # Initialize the IMX500 camera
-    model_path = "/usr/share/imx500-models/imx500_network_deeplabv3plus.rpk"
-    imx500 = IMX500(model_path)
-    picam2 = Picamera2(imx500.camera_num)
-
-    # Load network intrinsics for segmentation
-    intrinsics = imx500.network_intrinsics
-    if not intrinsics:
-        intrinsics = NetworkIntrinsics()
-        intrinsics.task = "segmentation"
-
-    # Start the camera with segmentation configuration
-    config = picam2.create_preview_configuration(buffer_count=12)
-    picam2.start(config, show_preview=False)
-
-    # Capture a frame
-    frame = picam2.capture_array()
-
-    # Process AI segmentation
-    outputs = imx500.get_outputs(metadata=picam2.capture_metadata())
-    segmentation_mask = outputs[0] if outputs is not None else np.zeros_like(frame[:, :, 0])
-
-    # Process segmentation results
-    ellipse_mask, refined_mask = process_segmentation_output(segmentation_mask, frame)
-
-    # Display results
-    display_results(frame, segmentation_mask, refined_mask, ellipse_mask)
-
-    picam2.stop()
+plt.show()
