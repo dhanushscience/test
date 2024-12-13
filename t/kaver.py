@@ -16,3 +16,5 @@ print("Photo saved as photo.jpg")
 
 # Stop the camera
 picam2.stop()
+
+pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client
