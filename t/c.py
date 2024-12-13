@@ -47,3 +47,5 @@ axes[1].set_title('Predicted Segmentation (Disc/Cup)')
 axes[1].axis('off')
 
 plt.show()
+
+#python3 -m pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cpu
